@@ -9,6 +9,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/avdva/deadcode/deadscanner"
 )
 
 var exitCode int
@@ -56,74 +58,12 @@ func doDir(name string) {
 	}
 }
 
-type Package struct {
-	p    *ast.Package
-	fs   *token.FileSet
-	decl map[string]ast.Node
-	used map[string]bool
-}
-
 func doPackage(fs *token.FileSet, pkg *ast.Package) {
-	p := &Package{
-		p:    pkg,
-		fs:   fs,
-		decl: make(map[string]ast.Node),
-		used: make(map[string]bool),
-	}
-	for _, file := range pkg.Files {
-		for _, decl := range file.Decls {
-			switch n := decl.(type) {
-			case *ast.GenDecl:
-				// var, const, types
-				for _, spec := range n.Specs {
-					switch s := spec.(type) {
-					case *ast.ValueSpec:
-						// constants and variables.
-						for _, name := range s.Names {
-							p.decl[name.Name] = n
-						}
-					case *ast.TypeSpec:
-						// type definitions.
-						p.decl[s.Name.Name] = n
-					}
-				}
-			case *ast.FuncDecl:
-				// function declarations
-				// TODO(remy): do methods
-				if n.Recv == nil {
-					p.decl[n.Name.Name] = n
-				}
-			}
-		}
-	}
-	// init() and _ are always used
-	p.used["init"] = true
-	p.used["_"] = true
-	if pkg.Name != "main" {
-		// exported names are marked used for non-main packages.
-		for name := range p.decl {
-			if ast.IsExported(name) {
-				p.used[name] = true
-			}
-		}
-	} else {
-		// in main programs, main() is called.
-		p.used["main"] = true
-	}
-	for _, file := range pkg.Files {
-		// walk file looking for used nodes.
-		ast.Walk(p, file)
-	}
-	// reports.
-	reports := Reports(nil)
-	for name, node := range p.decl {
-		if !p.used[name] {
-			reports = append(reports, Report{node.Pos(), name})
-		}
-	}
+	s := deadscanner.New(pkg)
+	reports := s.Do()
 	sort.Sort(reports)
 	for _, report := range reports {
-		errorf("%s: %s is unused", fs.Position(report.pos), report.name)
+		errorf("%s: %s is unused", fs.Position(report.Pos), report.Name)
 	}
 }
 
@@ -136,44 +76,3 @@ type Reports []Report
 func (l Reports) Len() int           { return len(l) }
 func (l Reports) Less(i, j int) bool { return l[i].pos < l[j].pos }
 func (l Reports) Swap(i, j int)      { l[i], l[j] = l[j], l[i] }
-
-// Visits files for used nodes.
-func (p *Package) Visit(node ast.Node) ast.Visitor {
-	u := usedWalker(*p) // hopefully p fields are references.
-	switch n := node.(type) {
-	// don't walk whole file, but only:
-	case *ast.ValueSpec:
-		// - variable initializers
-		for _, value := range n.Values {
-			ast.Walk(&u, value)
-		}
-		// variable types.
-		if n.Type != nil {
-			ast.Walk(&u, n.Type)
-		}
-	case *ast.BlockStmt:
-		// - function bodies
-		for _, stmt := range n.List {
-			ast.Walk(&u, stmt)
-		}
-	case *ast.FuncDecl:
-		// - function signatures
-		ast.Walk(&u, n.Type)
-	case *ast.TypeSpec:
-		// - type declarations
-		ast.Walk(&u, n.Type)
-	}
-	return p
-}
-
-type usedWalker Package
-
-// Walks through the AST marking used identifiers.
-func (p *usedWalker) Visit(node ast.Node) ast.Visitor {
-	// just be stupid and mark all *ast.Ident
-	switch n := node.(type) {
-	case *ast.Ident:
-		p.used[n.Name] = true
-	}
-	return p
-}
