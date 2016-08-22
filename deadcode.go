@@ -66,13 +66,3 @@ func doPackage(fs *token.FileSet, pkg *ast.Package) {
 		errorf("%s: %s is unused", fs.Position(report.Pos), report.Name)
 	}
 }
-
-type Report struct {
-	pos  token.Pos
-	name string
-}
-type Reports []Report
-
-func (l Reports) Len() int           { return len(l) }
-func (l Reports) Less(i, j int) bool { return l[i].pos < l[j].pos }
-func (l Reports) Swap(i, j int)      { l[i], l[j] = l[j], l[i] }

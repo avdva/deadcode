@@ -1,4 +1,4 @@
-package ex
+package testpkg
 
 // unused unexported const
 const t = 10
@@ -53,4 +53,43 @@ func f3(a, b int) float32 {
 	}
 	_ = const1
 	return 0
+}
+
+// exported funcs are always used.
+func Used() {
+	v := func(a, b int) {
+
+	}
+	_ = v
+}
+
+type innertype struct {
+}
+
+type outertype struct {
+	i innertype
+}
+
+func f() {
+	c := outertype{}
+	_ = c
+}
+
+type outer2 struct {
+	f  interface{}
+	f2 interface{}
+	a  int
+}
+
+type used2 struct {
+}
+
+func V() {
+	v := outer2{f: used2{}}
+	u := outer2{used3{}, used3{}, 0}
+	_ = v
+	_ = u
+}
+
+type used3 struct {
 }

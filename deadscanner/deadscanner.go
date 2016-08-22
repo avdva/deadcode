@@ -33,38 +33,52 @@ func (stk stack) mark(name string) {
 	}
 	for i := len(stk) - 1; i >= 0; i-- {
 		if info, found := stk[i].decls[name]; found {
-			println("mark", name)
 			stk[i].decls[name] = identInfo{node: info.node, used: true}
 			return
 		}
 	}
-	//panic("undeclarated identifier " + name)
 }
 
+func (stk stack) add(name string, node ast.Node, used bool) {
+	if name == "_" {
+		return
+	}
+	info := stk.current().decls[name]
+	info.node = node
+	if !info.used { // do not reset 'used' flag
+		info.used = used
+	}
+	stk.current().decls[name] = info
+}
+
+// Report is a record about unused symbol.
 type Report struct {
 	Pos  token.Pos
 	Name string
 }
 
+// Reports is a sorted collection of records.
 type Reports []Report
 
 func (l Reports) Len() int           { return len(l) }
 func (l Reports) Less(i, j int) bool { return l[i].Pos < l[j].Pos }
 func (l Reports) Swap(i, j int)      { l[i], l[j] = l[j], l[i] }
 
+// Scanner scans for unused symbols in a package
 type Scanner struct {
 	pkg *ast.Package
 }
 
+// New returns new scanner for the given package.
 func New(pkg *ast.Package) *Scanner {
 	return &Scanner{pkg: pkg}
 }
 
+// Do analyzes the package and returns results.
 func (s *Scanner) Do() Reports {
 	var reports Reports
 	main := s.pkg.Name == "main"
 	for _, file := range s.pkg.Files {
-		// walk file looking for used nodes.
 		nv := &nodeVisitor{main: main}
 		nv.walk(file)
 		reports = append(reports, nv.reports...)
@@ -94,7 +108,6 @@ func (nv *nodeVisitor) pop() {
 	cur := nv.stk[len(nv.stk)-1]
 	for name, info := range cur.decls {
 		if !info.used {
-			fmt.Printf("unused: %s\n", name)
 			nv.reports = append(nv.reports, Report{Name: name, Pos: info.node.Pos()})
 		}
 	}
@@ -102,67 +115,74 @@ func (nv *nodeVisitor) pop() {
 }
 
 func (nv *nodeVisitor) Visit(node ast.Node) ast.Visitor {
-	if node == nil {
-		return nil
-	}
-	fmt.Printf("node %v %T\n", node, node)
+	var ret ast.Visitor
 	switch node.(type) {
 	case *ast.File:
 		f := node.(*ast.File)
 		for _, decl := range f.Decls {
 			ast.Walk(nv, decl)
 		}
-		return nil
 	case *ast.ValueSpec, *ast.TypeSpec, *ast.GenDecl, *ast.DeclStmt:
 		v := &declVisitor{stk: nv.stk, main: nv.main}
 		ast.Walk(v, node)
-		return nil
 	case *ast.FuncDecl:
-		println("func decl")
 		fd := node.(*ast.FuncDecl)
-		nv.addFunc(fd.Name.Name, fd)
+		if fd.Recv == nil { // TODO(avd) - methods
+			nv.addFunc(fd.Name.Name, fd)
+		}
 		ast.Walk(nv, fd.Body)
-		return nil
 	case *ast.BlockStmt:
 		nv.push()
-		println("PUSH")
 		b := node.(*ast.BlockStmt)
 		for _, stmt := range b.List {
 			ast.Walk(nv, stmt)
 		}
-		println("POP")
 		nv.pop()
-		return nil
 	case *ast.AssignStmt:
 		a := node.(*ast.AssignStmt)
 		for _, expr := range a.Rhs {
 			ast.Walk(nv, expr)
 		}
-		return nil
 	case *ast.Ident:
 		id := node.(*ast.Ident)
 		nv.stk.mark(id.Name)
+		ret = nv
+	case *ast.KeyValueExpr:
+		kv := node.(*ast.KeyValueExpr)
+		ast.Walk(nv, kv.Value)
+	case *ast.CompositeLit:
+		t := node.(*ast.CompositeLit)
+		fmt.Printf("comp %v %T\n", t, t)
+		if t.Type != nil {
+			fmt.Printf("  comp type %v %T\n", t.Type, t.Type)
+			if id, ok := t.Type.(*ast.Ident); ok {
+				println("mark", id.Name)
+				nv.stk.mark(id.Name)
+			}
+		}
+		for _, elt := range t.Elts {
+			ast.Walk(nv, elt)
+			fmt.Printf("visit comp %v %T\n", elt, elt)
+		}
+	default:
+		ret = nv
 	}
-	return nv
+	return ret
 }
 
 func (nv *nodeVisitor) addFunc(name string, node ast.Node) {
 	var used bool
 	if nv.stk.top() {
-		if ast.IsExported(name) {
-			used = true
-		} else if name == "init" {
-			used = true
-		} else if name == "main" && nv.main {
+		if name == "init" || name == "main" && nv.main || ast.IsExported(name) {
 			used = true
 		}
 	}
-	nv.stk.current().decls[name] = identInfo{node: node, used: used}
+	nv.stk.add(name, node, used)
 }
 
 type declVisitor struct {
-	main     bool
 	stk      stack
+	main     bool
 	forConst bool
 }
 
@@ -170,19 +190,14 @@ func (d *declVisitor) Visit(node ast.Node) ast.Visitor {
 	if node == nil {
 		return nil
 	}
-	fmt.Printf("  decl %v %T\n", node, node)
 	switch n := node.(type) {
 	case *ast.GenDecl:
 		d.forConst = n.Tok == token.CONST
-	case *ast.DeclStmt:
-		println("  decl2")
 	case *ast.ValueSpec:
-		fmt.Println("  value spec")
 		if d.forConst {
 			for _, name := range n.Names {
-				println("  new", name.Name)
 				used := d.stk.top() && ast.IsExported(name.Name)
-				d.stk.current().decls[name.Name] = identInfo{node: name, used: used}
+				d.stk.add(name.Name, name, used)
 			}
 		} else if n.Type != nil {
 			if id, ok := n.Type.(*ast.Ident); ok {
@@ -190,7 +205,15 @@ func (d *declVisitor) Visit(node ast.Node) ast.Visitor {
 			}
 		}
 	case *ast.TypeSpec:
-		d.stk.current().decls[n.Name.Name] = identInfo{node: node}
+		d.stk.add(n.Name.Name, node, false)
+	case *ast.StructType:
+		for _, field := range n.Fields.List {
+			if field.Type != nil {
+				if id, ok := field.Type.(*ast.Ident); ok {
+					d.stk.mark(id.Name)
+				}
+			}
+		}
 	}
 	return d
 }
