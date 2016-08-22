@@ -8,6 +8,11 @@ import (
 	"go/token"
 )
 
+const (
+	phaseAdd = iota
+	phaseMark
+)
+
 type identInfo struct {
 	node ast.Node
 	used bool
@@ -17,23 +22,35 @@ type context struct {
 	decls map[string]identInfo
 }
 
-type stack []context
+type stack struct {
+	ctx []context
+}
 
 func (stk stack) current() context {
-	return stk[len(stk)-1]
+	return stk.ctx[len(stk.ctx)-1]
 }
 
 func (stk stack) top() bool {
-	return len(stk) == 1
+	return len(stk.ctx) == 1
+}
+
+func (stk *stack) pop() {
+	stk.ctx = stk.ctx[:len(stk.ctx)-1]
+}
+
+func (stk *stack) push() {
+	stk.ctx = append(stk.ctx, context{
+		decls: make(map[string]identInfo),
+	})
 }
 
 func (stk stack) mark(name string) {
 	if name == "_" {
 		return
 	}
-	for i := len(stk) - 1; i >= 0; i-- {
-		if info, found := stk[i].decls[name]; found {
-			stk[i].decls[name] = identInfo{node: info.node, used: true}
+	for i := len(stk.ctx) - 1; i >= 0; i-- {
+		if info, found := stk.ctx[i].decls[name]; found {
+			stk.ctx[i].decls[name] = identInfo{node: info.node, used: true}
 			return
 		}
 	}
@@ -90,28 +107,23 @@ type nodeVisitor struct {
 	stk     stack
 	main    bool
 	reports Reports
-}
-
-func (nv *nodeVisitor) push() {
-	nv.stk = append(nv.stk, context{
-		decls: make(map[string]identInfo),
-	})
+	phase   int
 }
 
 func (nv *nodeVisitor) walk(node ast.Node) {
-	nv.push()
+	nv.stk.push()
 	ast.Walk(nv, node)
 	nv.pop()
 }
 
 func (nv *nodeVisitor) pop() {
-	cur := nv.stk[len(nv.stk)-1]
+	cur := nv.stk.current()
 	for name, info := range cur.decls {
 		if !info.used {
 			nv.reports = append(nv.reports, Report{Name: name, Pos: info.node.Pos()})
 		}
 	}
-	nv.stk = nv.stk[:len(nv.stk)-1]
+	nv.stk.pop()
 }
 
 func (nv *nodeVisitor) Visit(node ast.Node) ast.Visitor {
@@ -123,7 +135,7 @@ func (nv *nodeVisitor) Visit(node ast.Node) ast.Visitor {
 			ast.Walk(nv, decl)
 		}
 	case *ast.ValueSpec, *ast.TypeSpec, *ast.GenDecl, *ast.DeclStmt:
-		v := &declVisitor{stk: nv.stk, main: nv.main}
+		v := &declVisitor{stk: nv.stk, main: nv.main, phase: nv.phase}
 		ast.Walk(v, node)
 	case *ast.FuncDecl:
 		fd := node.(*ast.FuncDecl)
@@ -132,7 +144,7 @@ func (nv *nodeVisitor) Visit(node ast.Node) ast.Visitor {
 		}
 		ast.Walk(nv, fd.Body)
 	case *ast.BlockStmt:
-		nv.push()
+		nv.stk.push()
 		b := node.(*ast.BlockStmt)
 		for _, stmt := range b.List {
 			ast.Walk(nv, stmt)
@@ -184,6 +196,7 @@ type declVisitor struct {
 	stk      stack
 	main     bool
 	forConst bool
+	phase    int
 }
 
 func (d *declVisitor) Visit(node ast.Node) ast.Visitor {
