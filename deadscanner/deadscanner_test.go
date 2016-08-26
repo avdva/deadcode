@@ -16,7 +16,7 @@ type rec struct {
 }
 
 var (
-	names = []rec{
+	records = []rec{
 		rec{"t", 4},
 		rec{"main", 18},
 		rec{"f2", 34},
@@ -44,9 +44,9 @@ func TestDeadScanner(t *testing.T) {
 	s := New(pkgs["testpkg"])
 	reports := s.Do()
 	sort.Sort(reports)
-	for i, name := range names {
+	for i, name := range records {
 		if i >= len(reports) {
-			t.Errorf("expected %d records, got %d", len(names), len(reports))
+			t.Errorf("expected %d records, got %d", len(records), len(reports))
 			return
 		}
 		report := reports[i]
@@ -55,9 +55,9 @@ func TestDeadScanner(t *testing.T) {
 				report.Name, fs.Position(report.Pos).Line)
 		}
 	}
-	if len(reports) > len(names) {
-		t.Errorf("expected %d records, got %d", len(names), len(reports))
-		for i := len(names); i < len(reports); i++ {
+	if len(reports) > len(records) {
+		t.Errorf("expected %d records, got %d", len(records), len(reports))
+		for i := len(records); i < len(reports); i++ {
 			report := reports[i]
 			t.Errorf("unexpected rec {%s %d}", report.Name, fs.Position(report.Pos).Line)
 		}

@@ -93,3 +93,53 @@ func V() {
 
 type used3 struct {
 }
+
+func U() {
+	type usedType int
+	{
+		var c usedType
+		_ = c
+	}
+	_ = usedConst1
+}
+
+type Outer3 struct {
+	u used4
+}
+
+type used4 int
+
+type Outer5 used5
+
+type used5 int
+
+const usedConst1 = 0
+
+func F1(a, b used6) {
+
+}
+
+type used6 int
+
+type FT func(a, b used7)
+
+type used7 int
+
+type used8 int
+
+func F2(a used8) {
+
+}
+
+func F3() {
+	ch := make(chan used9)
+	_ = ch
+}
+
+type used9 int
+
+type Ex chan used10
+
+type used10 int
+
+type Ex2 used12

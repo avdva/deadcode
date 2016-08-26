@@ -3,14 +3,9 @@
 package deadscanner
 
 import (
-	"fmt"
 	"go/ast"
 	"go/token"
-)
-
-const (
-	phaseAdd = iota
-	phaseMark
+	"sort"
 )
 
 type identInfo struct {
@@ -44,16 +39,17 @@ func (stk *stack) push() {
 	})
 }
 
-func (stk stack) mark(name string) {
+func (stk stack) mark(name string) bool {
 	if name == "_" {
-		return
+		return true
 	}
 	for i := len(stk.ctx) - 1; i >= 0; i-- {
 		if info, found := stk.ctx[i].decls[name]; found {
 			stk.ctx[i].decls[name] = identInfo{node: info.node, used: true}
-			return
+			return true
 		}
 	}
+	return false
 }
 
 func (stk stack) add(name string, node ast.Node, used bool) {
@@ -94,20 +90,41 @@ func New(pkg *ast.Package) *Scanner {
 // Do analyzes the package and returns results.
 func (s *Scanner) Do() Reports {
 	var reports Reports
+	var allFiles []string
+	undeclarated := make(map[string]struct{})
 	main := s.pkg.Name == "main"
-	for _, file := range s.pkg.Files {
-		nv := &nodeVisitor{main: main}
+	for name := range s.pkg.Files {
+		allFiles = append(allFiles, name)
+	}
+	sort.Strings(allFiles)
+	for _, name := range allFiles {
+		file := s.pkg.Files[name]
+		nv := &nodeVisitor{main: main, undeclarated: make(map[string]struct{})}
 		nv.walk(file)
+		for name := range nv.undeclarated {
+			undeclarated[name] = struct{}{}
+		}
 		reports = append(reports, nv.reports...)
 	}
+	reports = s.checkGlobals(reports, undeclarated)
 	return reports
 }
 
+func (s *Scanner) checkGlobals(reports Reports, undeclarated map[string]struct{}) Reports {
+	tmp := reports[:0]
+	for _, rep := range reports {
+		if _, found := undeclarated[rep.Name]; !found {
+			tmp = append(tmp, rep)
+		}
+	}
+	return tmp
+}
+
 type nodeVisitor struct {
-	stk     stack
-	main    bool
-	reports Reports
-	phase   int
+	stk          stack
+	main         bool
+	reports      Reports
+	undeclarated map[string]struct{}
 }
 
 func (nv *nodeVisitor) walk(node ast.Node) {
@@ -135,13 +152,15 @@ func (nv *nodeVisitor) Visit(node ast.Node) ast.Visitor {
 			ast.Walk(nv, decl)
 		}
 	case *ast.ValueSpec, *ast.TypeSpec, *ast.GenDecl, *ast.DeclStmt:
-		v := &declVisitor{stk: nv.stk, main: nv.main, phase: nv.phase}
+		v := &declVisitor{stk: nv.stk, main: nv.main, undeclarated: nv.undeclarated}
 		ast.Walk(v, node)
 	case *ast.FuncDecl:
 		fd := node.(*ast.FuncDecl)
 		if fd.Recv == nil { // TODO(avd) - methods
 			nv.addFunc(fd.Name.Name, fd)
 		}
+		inspectFuncDecl(fd.Type.Params, &nv.stk, nv.undeclarated)
+		inspectFuncDecl(fd.Type.Results, &nv.stk, nv.undeclarated)
 		ast.Walk(nv, fd.Body)
 	case *ast.BlockStmt:
 		nv.stk.push()
@@ -157,24 +176,24 @@ func (nv *nodeVisitor) Visit(node ast.Node) ast.Visitor {
 		}
 	case *ast.Ident:
 		id := node.(*ast.Ident)
-		nv.stk.mark(id.Name)
+		if !nv.stk.mark(id.Name) {
+			nv.undeclarated[id.Name] = struct{}{}
+		}
 		ret = nv
 	case *ast.KeyValueExpr:
 		kv := node.(*ast.KeyValueExpr)
 		ast.Walk(nv, kv.Value)
 	case *ast.CompositeLit:
 		t := node.(*ast.CompositeLit)
-		fmt.Printf("comp %v %T\n", t, t)
 		if t.Type != nil {
-			fmt.Printf("  comp type %v %T\n", t.Type, t.Type)
 			if id, ok := t.Type.(*ast.Ident); ok {
-				println("mark", id.Name)
-				nv.stk.mark(id.Name)
+				if !nv.stk.mark(id.Name) {
+					nv.undeclarated[id.Name] = struct{}{}
+				}
 			}
 		}
 		for _, elt := range t.Elts {
 			ast.Walk(nv, elt)
-			fmt.Printf("visit comp %v %T\n", elt, elt)
 		}
 	default:
 		ret = nv
@@ -193,10 +212,10 @@ func (nv *nodeVisitor) addFunc(name string, node ast.Node) {
 }
 
 type declVisitor struct {
-	stk      stack
-	main     bool
-	forConst bool
-	phase    int
+	stk          stack
+	main         bool
+	forConst     bool
+	undeclarated map[string]struct{}
 }
 
 func (d *declVisitor) Visit(node ast.Node) ast.Visitor {
@@ -214,19 +233,78 @@ func (d *declVisitor) Visit(node ast.Node) ast.Visitor {
 			}
 		} else if n.Type != nil {
 			if id, ok := n.Type.(*ast.Ident); ok {
-				d.stk.mark(id.Name)
+				if !d.stk.mark(id.Name) {
+					d.undeclarated[id.Name] = struct{}{}
+				}
 			}
 		}
 	case *ast.TypeSpec:
-		d.stk.add(n.Name.Name, node, false)
+		ast.Walk(&typeVisitor{stk: d.stk, undeclarated: d.undeclarated}, node)
+		return nil
 	case *ast.StructType:
 		for _, field := range n.Fields.List {
-			if field.Type != nil {
-				if id, ok := field.Type.(*ast.Ident); ok {
-					d.stk.mark(id.Name)
+			if id, ok := field.Type.(*ast.Ident); ok {
+				if !d.stk.mark(id.Name) {
+					d.undeclarated[id.Name] = struct{}{}
 				}
 			}
 		}
 	}
 	return d
+}
+
+type typeVisitor struct {
+	stk          stack
+	undeclarated map[string]struct{}
+}
+
+func (t *typeVisitor) Visit(node ast.Node) ast.Visitor {
+	if node == nil {
+		return nil
+	}
+	switch n := node.(type) {
+	case *ast.TypeSpec:
+		used := t.stk.top() && ast.IsExported(n.Name.Name)
+		t.stk.add(n.Name.Name, node, used)
+		if id, ok := n.Type.(*ast.Ident); ok {
+			if !t.stk.mark(id.Name) {
+				t.undeclarated[id.Name] = struct{}{}
+			}
+			return nil
+		}
+	case *ast.StructType:
+		if !inspectFuncDecl(n.Fields, &t.stk, t.undeclarated) {
+			return nil
+		}
+	case *ast.FuncType:
+		need1 := inspectFuncDecl(n.Params, &t.stk, t.undeclarated)
+		need2 := inspectFuncDecl(n.Results, &t.stk, t.undeclarated)
+		if !need1 && !need2 {
+			return nil
+		}
+	case *ast.ChanType:
+		if id, ok := n.Value.(*ast.Ident); ok {
+			if !t.stk.mark(id.Name) {
+				t.undeclarated[id.Name] = struct{}{}
+			}
+			return nil
+		}
+	}
+	return t
+}
+
+func inspectFuncDecl(fields *ast.FieldList, stk *stack, undeclarated map[string]struct{}) (needDeeper bool) {
+	if fields == nil {
+		return
+	}
+	for _, field := range fields.List {
+		if id, ok := field.Type.(*ast.Ident); ok {
+			if !stk.mark(id.Name) {
+				undeclarated[id.Name] = struct{}{}
+			}
+		} else {
+			needDeeper = true
+		}
+	}
+	return
 }
