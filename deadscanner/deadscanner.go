@@ -159,8 +159,8 @@ func (nv *nodeVisitor) Visit(node ast.Node) ast.Visitor {
 		if fd.Recv == nil { // TODO(avd) - methods
 			nv.addFunc(fd.Name.Name, fd)
 		}
-		inspectFuncDecl(fd.Type.Params, &nv.stk, nv.undeclarated)
-		inspectFuncDecl(fd.Type.Results, &nv.stk, nv.undeclarated)
+		inspectFields(fd.Type.Params, &nv.stk, nv.undeclarated)
+		inspectFields(fd.Type.Results, &nv.stk, nv.undeclarated)
 		ast.Walk(nv, fd.Body)
 	case *ast.BlockStmt:
 		nv.stk.push()
@@ -238,6 +238,10 @@ func (d *declVisitor) Visit(node ast.Node) ast.Visitor {
 				}
 			}
 		}
+		for _, value := range n.Values {
+			ast.Walk(&nodeVisitor{stk: d.stk, main: d.main, undeclarated: d.undeclarated}, value)
+		}
+		return nil
 	case *ast.TypeSpec:
 		ast.Walk(&typeVisitor{stk: d.stk, undeclarated: d.undeclarated}, node)
 		return nil
@@ -249,6 +253,9 @@ func (d *declVisitor) Visit(node ast.Node) ast.Visitor {
 				}
 			}
 		}
+	case *ast.CallExpr:
+		ast.Walk(&nodeVisitor{stk: d.stk, main: d.main, undeclarated: d.undeclarated}, node)
+		return nil
 	}
 	return d
 }
@@ -273,15 +280,12 @@ func (t *typeVisitor) Visit(node ast.Node) ast.Visitor {
 			return nil
 		}
 	case *ast.StructType:
-		if !inspectFuncDecl(n.Fields, &t.stk, t.undeclarated) {
-			return nil
-		}
+		inspectFields(n.Fields, &t.stk, t.undeclarated)
+		return nil
 	case *ast.FuncType:
-		need1 := inspectFuncDecl(n.Params, &t.stk, t.undeclarated)
-		need2 := inspectFuncDecl(n.Results, &t.stk, t.undeclarated)
-		if !need1 && !need2 {
-			return nil
-		}
+		inspectFields(n.Params, &t.stk, t.undeclarated)
+		inspectFields(n.Results, &t.stk, t.undeclarated)
+		return nil
 	case *ast.ChanType:
 		if id, ok := n.Value.(*ast.Ident); ok {
 			if !t.stk.mark(id.Name) {
@@ -293,17 +297,18 @@ func (t *typeVisitor) Visit(node ast.Node) ast.Visitor {
 	return t
 }
 
-func inspectFuncDecl(fields *ast.FieldList, stk *stack, undeclarated map[string]struct{}) (needDeeper bool) {
+func inspectFields(fields *ast.FieldList, stk *stack, undeclarated map[string]struct{}) {
 	if fields == nil {
 		return
 	}
 	for _, field := range fields.List {
-		if id, ok := field.Type.(*ast.Ident); ok {
-			if !stk.mark(id.Name) {
-				undeclarated[id.Name] = struct{}{}
+		switch tField := field.Type.(type) {
+		case *ast.Ident:
+			if !stk.mark(tField.Name) {
+				undeclarated[tField.Name] = struct{}{}
 			}
-		} else {
-			needDeeper = true
+		default:
+			ast.Walk(&nodeVisitor{stk: *stk, main: false, undeclarated: undeclarated}, field.Type)
 		}
 	}
 	return

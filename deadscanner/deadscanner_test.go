@@ -6,7 +6,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"sort"
 	"testing"
 )
 
@@ -43,23 +42,32 @@ func TestDeadScanner(t *testing.T) {
 	}
 	s := New(pkgs["testpkg"])
 	reports := s.Do()
-	sort.Sort(reports)
-	for i, name := range records {
-		if i >= len(reports) {
-			t.Errorf("expected %d records, got %d", len(records), len(reports))
-			return
+
+	var i int
+outer:
+	for i < len(records) {
+		name := records[i]
+		for j := 0; j < len(reports); j++ {
+			report := reports[j]
+			if name.line == fs.Position(report.Pos).Line && name.name == report.Name {
+				newRecords := records[:i]
+				if i < len(records)-1 {
+					newRecords = append(newRecords, records[i+1:]...)
+				}
+				newReports := reports[:j]
+				if j < len(reports)-1 {
+					newReports = append(newReports, reports[j+1:]...)
+				}
+				records, reports = newRecords, newReports
+				continue outer
+			}
 		}
-		report := reports[i]
-		if name.line != fs.Position(report.Pos).Line || name.name != report.Name {
-			t.Errorf("expected {%s %d}, got {%s %d}", name.name, name.line,
-				report.Name, fs.Position(report.Pos).Line)
-		}
+		i++
 	}
-	if len(reports) > len(records) {
-		t.Errorf("expected %d records, got %d", len(records), len(reports))
-		for i := len(records); i < len(reports); i++ {
-			report := reports[i]
-			t.Errorf("unexpected rec {%s %d}", report.Name, fs.Position(report.Pos).Line)
-		}
+	for _, rec := range records {
+		t.Errorf("not marked as unused: %v", rec)
+	}
+	for _, rep := range reports {
+		t.Errorf("must not marked be as unused: %s at %s", rep.Name, fs.Position(rep.Pos))
 	}
 }
