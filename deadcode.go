@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/avdva/deadcode/deadscanner"
+	"github.com/tsenart/deadcode/deadscanner"
 )
 
 var exitCode int
