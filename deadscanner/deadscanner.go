@@ -204,7 +204,7 @@ func (nv *nodeVisitor) Visit(node ast.Node) ast.Visitor {
 func (nv *nodeVisitor) addFunc(name string, node ast.Node) {
 	var used bool
 	if nv.stk.top() {
-		if name == "init" || name == "main" && nv.main || ast.IsExported(name) {
+		if name == "init" || name == "main" && nv.main || !nv.main && ast.IsExported(name) {
 			used = true
 		}
 	}
