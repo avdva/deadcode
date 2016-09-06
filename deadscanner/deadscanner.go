@@ -214,7 +214,6 @@ func (nv *nodeVisitor) addFunc(name string, node ast.Node) {
 type declVisitor struct {
 	stk          stack
 	main         bool
-	forConst     bool
 	undeclarated map[string]struct{}
 }
 
@@ -223,15 +222,12 @@ func (d *declVisitor) Visit(node ast.Node) ast.Visitor {
 		return nil
 	}
 	switch n := node.(type) {
-	case *ast.GenDecl:
-		d.forConst = n.Tok == token.CONST
 	case *ast.ValueSpec:
-		if d.forConst {
-			for _, name := range n.Names {
-				used := d.stk.top() && ast.IsExported(name.Name)
-				d.stk.add(name.Name, name, used)
-			}
-		} else if n.Type != nil {
+		for _, name := range n.Names {
+			used := d.stk.top() && ast.IsExported(name.Name) && !d.main
+			d.stk.add(name.Name, name, used)
+		}
+		if n.Type != nil {
 			if id, ok := n.Type.(*ast.Ident); ok {
 				if !d.stk.mark(id.Name) {
 					d.undeclarated[id.Name] = struct{}{}

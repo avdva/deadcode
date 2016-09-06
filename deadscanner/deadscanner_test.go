@@ -49,11 +49,13 @@ func TestDeadScannerNonMain(t *testing.T) {
 		records = []rec{
 			rec{"t", 4},
 			rec{"main", 18},
+			rec{"variable", 20},
 			rec{"f2", 34},
 			rec{"const1", 37},
 			rec{"const2", 38},
 			rec{"main", 39},
 			rec{"init", 40},
+			rec{"variable2", 43},
 			rec{"f3", 46},
 			rec{"ttt", 48},
 			rec{"const2", 49},
@@ -79,6 +81,10 @@ func TestDeadScannerMain(t *testing.T) {
 	var (
 		records = []rec{
 			rec{"Unused1", 3},
+			rec{"UnusedConst1", 5},
+			rec{"unusedConst2", 6},
+			rec{"unusedfunc1", 8},
+			rec{"UnusedFunc2", 15},
 		}
 	)
 	fs := token.NewFileSet()
