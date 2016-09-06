@@ -110,6 +110,7 @@ func (s *Scanner) Do() Reports {
 	return reports
 }
 
+// checkGlobals checks if there are global symbols, declared after usage.
 func (s *Scanner) checkGlobals(reports Reports, undeclarated map[string]struct{}) Reports {
 	tmp := reports[:0]
 	for _, rep := range reports {
@@ -120,6 +121,7 @@ func (s *Scanner) checkGlobals(reports Reports, undeclarated map[string]struct{}
 	return tmp
 }
 
+// nodeVisitor visits ast nodes.
 type nodeVisitor struct {
 	stk          stack
 	main         bool
@@ -211,6 +213,7 @@ func (nv *nodeVisitor) addFunc(name string, node ast.Node) {
 	nv.stk.add(name, node, used)
 }
 
+// declVisitor visits consts, vars, types, and other declarations.
 type declVisitor struct {
 	stk          stack
 	main         bool
@@ -256,6 +259,7 @@ func (d *declVisitor) Visit(node ast.Node) ast.Visitor {
 	return d
 }
 
+// typeVisitor visits type declarations.
 type typeVisitor struct {
 	stk          stack
 	undeclarated map[string]struct{}
@@ -293,6 +297,7 @@ func (t *typeVisitor) Visit(node ast.Node) ast.Visitor {
 	return t
 }
 
+// inspectFields checks funcs params and return values along with structs fields.
 func inspectFields(fields *ast.FieldList, stk *stack, undeclarated map[string]struct{}) {
 	if fields == nil {
 		return
