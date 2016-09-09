@@ -17,6 +17,8 @@ func UnusedFunc2() {
 	_, _ = a, b
 }
 
+type UnusedType int
+
 func main() {
 
 }

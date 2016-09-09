@@ -55,3 +55,27 @@ var _ = usedFunc()
 func usedFunc() int {
 	return 0
 }
+
+///
+
+var UsedVar struct {
+	used18
+}
+
+type used18 struct {
+}
+
+///
+type used19 int
+
+func F6() {
+	_ = map[string]used19{"x": 0}
+}
+
+///
+
+type used20 struct{}
+
+func F7() {
+	_ = map[used20]string{used20{}: ""}
+}

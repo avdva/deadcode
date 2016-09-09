@@ -3,9 +3,14 @@
 package deadscanner
 
 import (
+	"fmt"
 	"go/ast"
 	"go/token"
 	"sort"
+)
+
+const (
+	debug = false
 )
 
 type identInfo struct {
@@ -146,6 +151,12 @@ func (nv *nodeVisitor) pop() {
 }
 
 func (nv *nodeVisitor) Visit(node ast.Node) ast.Visitor {
+	if node == nil {
+		return nil
+	}
+	if debug {
+		fmt.Printf("nv: %v %T\n", node, node)
+	}
 	var ret ast.Visitor
 	switch node.(type) {
 	case *ast.File:
@@ -165,8 +176,11 @@ func (nv *nodeVisitor) Visit(node ast.Node) ast.Visitor {
 		inspectFields(fd.Type.Results, &nv.stk, nv.undeclarated)
 		ast.Walk(nv, fd.Body)
 	case *ast.BlockStmt:
-		nv.stk.push()
 		b := node.(*ast.BlockStmt)
+		if b == nil {
+			break
+		}
+		nv.stk.push()
 		for _, stmt := range b.List {
 			ast.Walk(nv, stmt)
 		}
@@ -177,23 +191,15 @@ func (nv *nodeVisitor) Visit(node ast.Node) ast.Visitor {
 			ast.Walk(nv, expr)
 		}
 	case *ast.Ident:
-		id := node.(*ast.Ident)
-		if !nv.stk.mark(id.Name) {
-			nv.undeclarated[id.Name] = struct{}{}
-		}
+		markIfIdent(node, nv.stk, nv.undeclarated)
 		ret = nv
 	case *ast.KeyValueExpr:
 		kv := node.(*ast.KeyValueExpr)
 		ast.Walk(nv, kv.Value)
+		ast.Walk(nv, kv.Key)
 	case *ast.CompositeLit:
 		t := node.(*ast.CompositeLit)
-		if t.Type != nil {
-			if id, ok := t.Type.(*ast.Ident); ok {
-				if !nv.stk.mark(id.Name) {
-					nv.undeclarated[id.Name] = struct{}{}
-				}
-			}
-		}
+		ast.Walk(nv, t.Type)
 		for _, elt := range t.Elts {
 			ast.Walk(nv, elt)
 		}
@@ -224,36 +230,36 @@ func (d *declVisitor) Visit(node ast.Node) ast.Visitor {
 	if node == nil {
 		return nil
 	}
+	if debug {
+		fmt.Printf("d: %v %T\n", node, node)
+	}
 	switch n := node.(type) {
+	case *ast.GenDecl:
 	case *ast.ValueSpec:
 		for _, name := range n.Names {
 			used := d.stk.top() && ast.IsExported(name.Name) && !d.main
 			d.stk.add(name.Name, name, used)
 		}
-		if n.Type != nil {
-			if id, ok := n.Type.(*ast.Ident); ok {
-				if !d.stk.mark(id.Name) {
-					d.undeclarated[id.Name] = struct{}{}
-				}
-			}
-		}
 		for _, value := range n.Values {
 			ast.Walk(&nodeVisitor{stk: d.stk, main: d.main, undeclarated: d.undeclarated}, value)
 		}
-		return nil
+		if markIfIdent(n.Type, d.stk, d.undeclarated) {
+			return nil
+		}
 	case *ast.TypeSpec:
-		ast.Walk(&typeVisitor{stk: d.stk, undeclarated: d.undeclarated}, node)
+		ast.Walk(&typeVisitor{stk: d.stk, undeclarated: d.undeclarated, main: d.main}, node)
 		return nil
 	case *ast.StructType:
 		for _, field := range n.Fields.List {
-			if id, ok := field.Type.(*ast.Ident); ok {
-				if !d.stk.mark(id.Name) {
-					d.undeclarated[id.Name] = struct{}{}
-				}
-			}
+			markIfIdent(field.Type, d.stk, d.undeclarated)
 		}
 	case *ast.CallExpr:
 		ast.Walk(&nodeVisitor{stk: d.stk, main: d.main, undeclarated: d.undeclarated}, node)
+		return nil
+	case *ast.ArrayType:
+		if n.Len != nil {
+			ast.Walk(&nodeVisitor{stk: d.stk, main: d.main, undeclarated: d.undeclarated}, n.Len)
+		}
 		return nil
 	}
 	return d
@@ -262,6 +268,7 @@ func (d *declVisitor) Visit(node ast.Node) ast.Visitor {
 // typeVisitor visits type declarations.
 type typeVisitor struct {
 	stk          stack
+	main         bool
 	undeclarated map[string]struct{}
 }
 
@@ -269,14 +276,14 @@ func (t *typeVisitor) Visit(node ast.Node) ast.Visitor {
 	if node == nil {
 		return nil
 	}
+	if debug {
+		fmt.Printf("t: %v %T\n", node, node)
+	}
 	switch n := node.(type) {
 	case *ast.TypeSpec:
-		used := t.stk.top() && ast.IsExported(n.Name.Name)
+		used := t.stk.top() && ast.IsExported(n.Name.Name) && !t.main
 		t.stk.add(n.Name.Name, node, used)
-		if id, ok := n.Type.(*ast.Ident); ok {
-			if !t.stk.mark(id.Name) {
-				t.undeclarated[id.Name] = struct{}{}
-			}
+		if markIfIdent(n.Type, t.stk, t.undeclarated) {
 			return nil
 		}
 	case *ast.StructType:
@@ -287,14 +294,32 @@ func (t *typeVisitor) Visit(node ast.Node) ast.Visitor {
 		inspectFields(n.Results, &t.stk, t.undeclarated)
 		return nil
 	case *ast.ChanType:
-		if id, ok := n.Value.(*ast.Ident); ok {
-			if !t.stk.mark(id.Name) {
-				t.undeclarated[id.Name] = struct{}{}
-			}
+		if markIfIdent(n.Value, t.stk, t.undeclarated) {
 			return nil
 		}
+	case *ast.ArrayType:
+		if n.Len != nil {
+			ast.Walk(&nodeVisitor{stk: t.stk, undeclarated: t.undeclarated}, n.Len)
+		}
+		if !markIfIdent(n.Elt, t.stk, t.undeclarated) {
+			ast.Walk(t, n.Elt)
+		}
+		return nil
 	}
 	return t
+}
+
+func markIfIdent(node ast.Node, stk stack, undeclarated map[string]struct{}) bool {
+	if node == nil {
+		return true
+	}
+	if id, ok := node.(*ast.Ident); ok {
+		if !stk.mark(id.Name) {
+			undeclarated[id.Name] = struct{}{}
+		}
+		return true
+	}
+	return false
 }
 
 // inspectFields checks funcs params and return values along with structs fields.

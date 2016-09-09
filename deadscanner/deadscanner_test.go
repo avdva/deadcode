@@ -44,6 +44,21 @@ outer:
 	}
 }
 
+func checkDir(t *testing.T, records []rec, dir, pkg string) {
+	fs := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fs, dir, func(os.FileInfo) bool {
+		return true
+	}, parser.Mode(0))
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	s := New(pkgs[pkg])
+	reports := s.Do()
+
+	check(t, fs, records, reports)
+}
+
 func TestDeadScannerNonMain(t *testing.T) {
 	var (
 		records = []rec{
@@ -63,18 +78,8 @@ func TestDeadScannerNonMain(t *testing.T) {
 			rec{"f", 73},
 		}
 	)
-	fs := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fs, "./testpkg/", func(os.FileInfo) bool {
-		return true
-	}, parser.Mode(0))
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	s := New(pkgs["testpkg"])
-	reports := s.Do()
 
-	check(t, fs, records, reports)
+	checkDir(t, records, "./testdata/pkg/", "testpkg")
 }
 
 func TestDeadScannerMain(t *testing.T) {
@@ -85,18 +90,22 @@ func TestDeadScannerMain(t *testing.T) {
 			rec{"unusedConst2", 6},
 			rec{"unusedfunc1", 8},
 			rec{"UnusedFunc2", 15},
+			rec{"UnusedType", 20},
 		}
 	)
-	fs := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fs, "./testmain/", func(os.FileInfo) bool {
-		return true
-	}, parser.Mode(0))
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	s := New(pkgs["main"])
-	reports := s.Do()
+	checkDir(t, records, "./testdata/main/", "main")
+}
 
-	check(t, fs, records, reports)
+func TestDeadScannerConst(t *testing.T) {
+	var (
+		records = []rec{}
+	)
+	checkDir(t, records, "./testdata/cnst/", "cnst")
+}
+
+func TestDeadScannerArray(t *testing.T) {
+	var (
+		records = []rec{}
+	)
+	checkDir(t, records, "./testdata/array/", "array")
 }
